@@ -83,8 +83,8 @@ func newInstanceWithConn(t *testing.T, ctx context.Context, channel string) (*qc
 	t.Helper()
 
 	client := testRedisClient(t)
-	inv, err := qredis.NewRedisInvalidator[uint64Key](ctx, client, channel)
-	if err != nil {
+	inv := qredis.NewRedisInvalidator[uint64Key](ctx, client, channel)
+	if err := inv.Ready(ctx); err != nil {
 		t.Fatal(err)
 	}
 
@@ -456,8 +456,8 @@ func TestPublishReturnsKeyMarshalError(t *testing.T) {
 	defer cancel()
 
 	client := testRedisClient(t)
-	inv, err := qredis.NewRedisInvalidator[badPublisherKey](ctx, client, testChannel(t))
-	if err != nil {
+	inv := qredis.NewRedisInvalidator[badPublisherKey](ctx, client, testChannel(t))
+	if err := inv.Ready(ctx); err != nil {
 		t.Fatal(err)
 	}
 
@@ -470,8 +470,8 @@ func BenchmarkRedisPublish(b *testing.B) {
 	ctx, cancel := context.WithCancel(b.Context())
 	defer cancel()
 
-	inv, err := qredis.NewRedisInvalidator[uint64Key](ctx, testRedisClient(b), testChannel(b))
-	if err != nil {
+	inv := qredis.NewRedisInvalidator[uint64Key](ctx, testRedisClient(b), testChannel(b))
+	if err := inv.Ready(ctx); err != nil {
 		b.Fatal(err)
 	}
 
@@ -490,12 +490,9 @@ func BenchmarkRedisInvalidationRoundTrip(b *testing.B) {
 	defer cancel()
 
 	channel := testChannel(b)
-	pub, err := qredis.NewRedisInvalidator[uint64Key](ctx, testRedisClient(b), channel)
-	if err != nil {
-		b.Fatal(err)
-	}
-	sub, err := qredis.NewRedisInvalidator[uint64Key](ctx, testRedisClient(b), channel)
-	if err != nil {
+	pub := qredis.NewRedisInvalidator[uint64Key](ctx, testRedisClient(b), channel)
+	sub := qredis.NewRedisInvalidator[uint64Key](ctx, testRedisClient(b), channel)
+	if err := sub.Ready(ctx); err != nil {
 		b.Fatal(err)
 	}
 
@@ -522,7 +519,7 @@ func BenchmarkRedisInvalidationRoundTrip(b *testing.B) {
 	}
 }
 
-func TestNewRedisInvalidatorFailsWithoutRedis(t *testing.T) {
+func TestRedisInvalidatorReadyFailsWithoutRedis(t *testing.T) {
 	client := goredis.NewClient(&goredis.Options{
 		Addr:        "127.0.0.1:1",
 		DialTimeout: 50 * time.Millisecond,
@@ -533,7 +530,10 @@ func TestNewRedisInvalidatorFailsWithoutRedis(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 
-	if _, err := qredis.NewRedisInvalidator[uint64Key](ctx, client, "test"); err == nil {
+	// The constructor itself never blocks or fails; the connection problem shows up
+	// when a caller asks for the subscription to be confirmed.
+	inv := qredis.NewRedisInvalidator[uint64Key](ctx, client, "test")
+	if err := inv.Ready(ctx); err == nil {
 		t.Fatal("want error")
 	}
 }

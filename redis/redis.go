@@ -24,30 +24,37 @@ type RedisInvalidator[K wireKey, P keyPtr[K]] struct {
 	channel string
 	origin  uint64
 
+	ready chan struct{}
+
 	mu      sync.RWMutex
 	targets []func(keys ...K)
 }
 
-// NewRedisInvalidator subscribes to channel and starts dispatching invalidations.
-// parse turns a wire key back into K. The subscription stops when ctx is done.
 func NewRedisInvalidator[K wireKey, P keyPtr[K]](
 	ctx context.Context,
 	client goredis.UniversalClient,
 	channel string,
-) (*RedisInvalidator[K, P], error) {
+) *RedisInvalidator[K, P] {
 	n := &RedisInvalidator[K, P]{
 		client:  client,
 		channel: channel,
 		origin:  newOrigin(),
+		ready:   make(chan struct{}),
 	}
 
-	ps := client.Subscribe(ctx, channel)
-	if _, err := ps.Receive(ctx); err != nil {
-		ps.Close()
-		return nil, err
+	go n.run(ctx, client.Subscribe(ctx, channel))
+	return n
+}
+
+// Ready blocks until Redis confirms the subscription or ctx is done.
+// A subscription that never gets confirmed surfaces as ctx.Err().
+func (n *RedisInvalidator[K, P]) Ready(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-n.ready:
+		return nil
 	}
-	go n.run(ctx, ps)
-	return n, nil
 }
 
 func newOrigin() uint64 {
@@ -81,6 +88,14 @@ func (n *RedisInvalidator[K, P]) Publish(ctx context.Context, keys ...K) error {
 func (n *RedisInvalidator[K, P]) run(ctx context.Context, ps *goredis.PubSub) {
 	defer ps.Close()
 
+	if _, err := ps.Receive(ctx); err != nil {
+		if ctx.Err() == nil {
+			slog.ErrorContext(ctx, "qcache: cannot confirm redis subscription", "channel", n.channel, "error", err)
+		}
+	} else {
+		close(n.ready)
+	}
+
 	ch := ps.Channel()
 	for {
 		select {
@@ -104,8 +119,6 @@ func (n *RedisInvalidator[K, P]) dispatch(ctx context.Context, payload string) {
 		slog.ErrorContext(ctx, "qcache: bad invalidation message", "channel", n.channel, "error", err)
 		return
 	}
-	// The publishing instance already holds the fresh value. Dropping our own
-	// message keeps it from invalidating itself right after Set.
 	if m.Origin == n.origin || len(m.Keys) == 0 {
 		return
 	}
