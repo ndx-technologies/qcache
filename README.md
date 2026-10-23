@@ -8,7 +8,7 @@ qcache: Go in-process TTL cache with Redis pubsub invalidation
 - no JSON
 - binary encoding keys on wire
 - zero memory allocations
-- no reflection, no `interface{}/any`, generics
+- no reflection, no `interface{}`, no `any`, generics
 
 ```
 $ go test ./... -run '^$' -bench . -benchmem
