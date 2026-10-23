@@ -2,12 +2,13 @@ qcache: Go in-process TTL cache with Redis pubsub invalidation
 
 [![codecov](https://codecov.io/gh/ndx-technologies/qcache/graph/badge.svg?token=9Z03NFK8YA)](https://codecov.io/gh/ndx-technologies/qcache)
 
-- cached data does not leave process
-- redis does no store anything, only broadcast
+- data does not leave the process
+- redis does no store anything, only broadcast invlaidation control signal 
 - invalidation updates are broadcasted to peers
 - no JSON
 - binary encoding keys on wire
 - zero memory allocations
+- no reflection, no `interface{}/any`, generics
 
 ```
 $ go test ./... -run '^$' -bench . -benchmem
