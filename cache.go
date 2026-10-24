@@ -33,12 +33,18 @@ type entry[T any] struct {
 
 func (e entry[T]) expired(now time.Time) bool { return !e.expiresAt.IsZero() && now.After(e.expiresAt) }
 
+type expiryBucket[K comparable] struct {
+	tick int64
+	keys []K
+}
+
 // Cache stores data locally wiht TTL and broadcasts key changes to invalidate in peers.
 type Cache[K comparable, T any] struct {
 	config      CacheConfig[K, T]
 	broadcaster Broadcaster[K]
 	mu          sync.RWMutex
 	entries     map[K]entry[T]
+	buckets     []expiryBucket[K]
 }
 
 func NewCache[K comparable, T any](config CacheConfig[K, T], broadcaster Broadcaster[K]) *Cache[K, T] {
@@ -67,7 +73,6 @@ func (c *Cache[K, T]) Get(key K) (T, bool) {
 		return e.value, true
 	}
 
-	// Remove the expired entry unless another writer replaced it meanwhile.
 	c.mu.Lock()
 	if cur, ok := c.entries[key]; ok && cur.expiresAt.Equal(e.expiresAt) {
 		delete(c.entries, key)
@@ -87,6 +92,10 @@ func (c *Cache[K, T]) Set(ctx context.Context, key K, value T) error {
 
 	c.mu.Lock()
 	c.entries[key] = entry[T]{value: value, expiresAt: expiresAt}
+	if !expiresAt.IsZero() && c.config.SweepInterval > 0 {
+		tick := expiresAt.UnixNano() / c.config.SweepInterval.Nanoseconds()
+		c.enqueue(tick, key)
+	}
 	c.mu.Unlock()
 
 	if c.broadcaster != nil {
@@ -94,6 +103,15 @@ func (c *Cache[K, T]) Set(ctx context.Context, key K, value T) error {
 	}
 
 	return nil
+}
+
+func (c *Cache[K, T]) enqueue(tick int64, key K) {
+	if n := len(c.buckets); n > 0 && c.buckets[n-1].tick == tick {
+		c.buckets[n-1].keys = append(c.buckets[n-1].keys, key)
+		return
+	}
+
+	c.buckets = append(c.buckets, expiryBucket[K]{tick: tick, keys: []K{key}})
 }
 
 func (c *Cache[K, T]) Del(ctx context.Context, keys ...K) error {
@@ -128,30 +146,35 @@ func (c *Cache[K, T]) Len() int {
 
 // Sweep removes expired entries.
 func (c *Cache[K, T]) Sweep() {
-	now := time.Now()
-
-	// collect
-	c.mu.RLock()
-	var expired []K
-	for k, e := range c.entries {
-		if e.expired(now) {
-			expired = append(expired, k)
-		}
-	}
-	c.mu.RUnlock()
-
-	if len(expired) == 0 {
+	tick := c.config.SweepInterval.Nanoseconds()
+	if tick <= 0 {
 		return
 	}
 
-	// sweep
+	now := time.Now()
+	nowBucket := now.UnixNano() / tick
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	now = time.Now()
-	for _, k := range expired {
-		if e, ok := c.entries[k]; ok && e.expired(now) {
-			delete(c.entries, k)
+	for len(c.buckets) > 0 && c.buckets[0].tick < nowBucket {
+		c.sweepKeys(c.buckets[0].keys, now)
+		c.buckets[0] = expiryBucket[K]{}
+		c.buckets = c.buckets[1:]
+	}
+
+	if len(c.buckets) > 0 && c.buckets[0].tick == nowBucket {
+		c.sweepKeys(c.buckets[0].keys, now)
+	}
+}
+
+// sweepKeys deletes the keys that are expired. A key can sit in a bucket that no
+// longer matches its expiry, because overwriting and invalidation do not rewrite the
+// index, so only what is expired is ever deleted.
+func (c *Cache[K, T]) sweepKeys(keys []K, now time.Time) {
+	for _, key := range keys {
+		if e, ok := c.entries[key]; ok && e.expired(now) {
+			delete(c.entries, key)
 		}
 	}
 }
