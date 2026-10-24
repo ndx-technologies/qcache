@@ -168,9 +168,6 @@ func (c *Cache[K, T]) Sweep() {
 	}
 }
 
-// sweepKeys deletes the keys that are expired. A key can sit in a bucket that no
-// longer matches its expiry, because overwriting and invalidation do not rewrite the
-// index, so only what is expired is ever deleted.
 func (c *Cache[K, T]) sweepKeys(keys []K, now time.Time) {
 	for _, key := range keys {
 		if e, ok := c.entries[key]; ok && e.expired(now) {
