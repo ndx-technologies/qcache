@@ -1,7 +1,5 @@
 qcache: Go in-process TTL cache with Redis pubsub invalidation
 
-[![codecov](https://codecov.io/gh/ndx-technologies/qcache/graph/badge.svg?token=9Z03NFK8YA)](https://codecov.io/gh/ndx-technologies/qcache)
-
 - data does not leave the process
 - redis does no store anything, only broadcast invalidation control signal 
 - invalidation updates are broadcasted to peers
